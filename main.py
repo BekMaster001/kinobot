@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 # Firebase sozlamalari
 def initialize_firebase():
     try:
-        cred = credentials.Certificate('kodli-kino-yaratuvchi-firebase-adminsdk-fbsvc-2bb890271e.json')
+        cred = credentials.Certificate('kodli-kino-yaratuvchi-firebase-adminsdk-fbsvc-406c549d01.json')
         firebase_admin.initialize_app(cred, {
             'databaseURL': 'https://kodli-kino-yaratuvchi-default-rtdb.firebaseio.com/'
         })
