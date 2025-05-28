@@ -6,8 +6,13 @@ import logging
 import re
 import asyncio
 import json
-import platform  # Qo'shildi
+import platform
 from telegram.error import InvalidToken, TelegramError
+import os
+from dotenv import load_dotenv
+
+# .env faylidan ma'lumotlarni o'qish
+load_dotenv()
 
 # Logging sozlamalari
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -16,9 +21,21 @@ logger = logging.getLogger(__name__)
 # Firebase sozlamalari
 def initialize_firebase():
     try:
-        cred = credentials.Certificate('kodli-kino-yaratuvchi-firebase-adminsdk-fbsvc-406c549d01.json')
+        cred_dict = {
+            "type": "service_account",
+            "project_id": os.getenv("FIREBASE_PROJECT_ID"),
+            "private_key": os.getenv("FIREBASE_PRIVATE_KEY").replace("\\n", "\n"),
+            "client_email": os.getenv("FIREBASE_CLIENT_EMAIL"),
+            "client_id": os.getenv("FIREBASE_CLIENT_ID", "107554798059988733544"),
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+            "client_x509_cert_url": os.getenv("FIREBASE_CLIENT_X509_CERT_URL", "https://www.googleapis.com/robot/v1/metadata/x509/firebase-adminsdk-fbsvc%40kodli-kino-yaratuvchi.iam.gserviceaccount.com"),
+            "universe_domain": "googleapis.com"
+        }
+        cred = credentials.Certificate(cred_dict)
         firebase_admin.initialize_app(cred, {
-            'databaseURL': 'https://kodli-kino-yaratuvchi-default-rtdb.firebaseio.com/'
+            'databaseURL': os.getenv("DATABASE_URL")
         })
         return db.reference('/')
     except Exception as e:
@@ -30,7 +47,7 @@ if ref is None:
     raise Exception("Firebase ulanishi muvaffaqiyatsiz bo'ldi.")
 
 # Bot tokeni va sozlamalar
-TOKEN = "7776681400:AAEvpxmU8SyRrEHxwIt3B0anFAro4vsHO8M"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 ADMIN_ID = 253046132
 DEFAULT_MANDATORY_CHANNEL = "@kinolar001_rasmiy"
 BOT_USERNAME = "Markaziykinochi_bot"
@@ -226,6 +243,28 @@ async def import_movies(user_id: int, user_ref, movies_data: dict):
         logger.error(f"Kinolar ro'yxatini import qilishda xatolik (user: {user_id}): {str(e)}")
         return False
 
+async def export_all_firebase_data(admin_id: int) -> dict:
+    """Firebase'dagi barcha ma'lumotlarni eksport qilish"""
+    try:
+        all_data = ref.get() or {}
+        export_data = {
+            'admin_id': admin_id,
+            'firebase_data': all_data
+        }
+        return export_data
+    except Exception as e:
+        logger.error(f"Firebase ma'lumotlarini eksport qilishda xatolik (admin: {admin_id}): {str(e)}")
+        return None
+
+async def import_all_firebase_data(admin_id: int, firebase_data: dict):
+    """Firebase'dagi barcha ma'lumotlarni import qilish"""
+    try:
+        ref.set(firebase_data)
+        return True
+    except Exception as e:
+        logger.error(f"Firebase ma'lumotlarini import qilishda xatolik (admin: {admin_id}): {str(e)}")
+        return False
+
 async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Tugma bosilganda ishlaydigan funksiya"""
     query = update.callback_query
@@ -406,7 +445,9 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             [InlineKeyboardButton("🚫 Sub-botni bloklash", callback_data="block_sub_bot")],
             [InlineKeyboardButton("📊 Umumiy statistika", callback_data="global_stats")],
             [InlineKeyboardButton("✉️ Barchaga xabar yuborish", callback_data="admin_broadcast")],
-            [InlineKeyboardButton("➕ Qo‘shimcha sub-bot ruxsati", callback_data="allow_additional_sub_bot")]
+            [InlineKeyboardButton("➕ Qo‘shimcha sub-bot ruxsati", callback_data="allow_additional_sub_bot")],
+            [InlineKeyboardButton("📤 Barcha Firebase ma'lumotlarini eksport qilish", callback_data="export_all_firebase_data")],
+            [InlineKeyboardButton("📥 Barcha Firebase ma'lumotlarini import qilish", callback_data="import_all_firebase_data")]
         ]
         await query.message.reply_text("🛠 Admin panel:", reply_markup=InlineKeyboardMarkup(buttons))
     elif data == "list_sub_bots" and user_id == ADMIN_ID:
@@ -435,6 +476,23 @@ async def button_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     elif data == "allow_additional_sub_bot" and user_id == ADMIN_ID:
         context.user_data['state'] = 'ADD_ADDITIONAL_SUB_BOT'
         await query.message.reply_text("Qo‘shimcha sub-bot yaratishga ruxsat beriladigan foydalanuvchi ID’sini kiriting:", reply_markup=get_menu_button(user_id))
+    elif data == "export_all_firebase_data" and user_id == ADMIN_ID:
+        export_data = await export_all_firebase_data(user_id)
+        if not export_data:
+            await query.message.reply_text("Ma'lumotlarni eksport qilishda xatolik yuz berdi.", reply_markup=get_menu_button(user_id))
+            return
+        export_json = json.dumps(export_data, indent=2, ensure_ascii=False)
+        with open(f'firebase_data_{user_id}.json', 'w', encoding='utf-8') as f:
+            f.write(export_json)
+        await context.bot.send_document(
+            chat_id=user_id,
+            document=open(f'firebase_data_{user_id}.json', 'rb'),
+            caption="Firebase'dagi barcha ma'lumotlar eksport qilindi!",
+            reply_markup=get_menu_button(user_id)
+        )
+    elif data == "import_all_firebase_data" and user_id == ADMIN_ID:
+        context.user_data['state'] = 'IMPORT_ALL_FIREBASE_DATA'
+        await query.message.reply_text("Firebase ma'lumotlarini import qilish uchun JSON faylini yuboring:", reply_markup=get_menu_button(user_id))
     elif data == "save_content":
         if not context.user_data.get('content'):
             await query.message.reply_text("Hozircha hech qanday kontent yuborilmadi!", reply_markup=get_menu_button(user_id))
@@ -674,6 +732,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 await update.message.reply_text("Kinolar ro'yxati muvaffaqiyatli import qilindi!", reply_markup=get_menu_button(user_id))
             else:
                 await update.message.reply_text("Kinolar ro'yxatini import qilishda xatolik yuz berdi!", reply_markup=get_menu_button(user_id))
+        except json.JSONDecodeError:
+            await update.message.reply_text("Yuborilgan fayl noto‘g‘ri JSON formatida!", reply_markup=get_menu_button(user_id))
+        except Exception as e:
+            await update.message.reply_text(f"Xatolik yuz berdi: {str(e)}", reply_markup=get_menu_button(user_id))
+        context.user_data['state'] = None
+    elif state == 'IMPORT_ALL_FIREBASE_DATA' and user_id == ADMIN_ID:
+        if not update.message.document or not update.message.document.file_name.endswith('.json'):
+            await update.message.reply_text("Iltimos, faqat JSON faylini yuboring!", reply_markup=get_menu_button(user_id))
+            return
+        file = await update.message.document.get_file()
+        file_data = await file.download_as_bytearray()
+        try:
+            firebase_data = json.loads(file_data.decode('utf-8'))
+            if firebase_data.get('admin_id') != user_id:
+                await update.message.reply_text("Bu fayl sizning admin ID'ingizga mos kelmaydi!", reply_markup=get_menu_button(user_id))
+                return
+            success = await import_all_firebase_data(user_id, firebase_data.get('firebase_data', {}))
+            if success:
+                await update.message.reply_text("Firebase ma'lumotlari muvaffaqiyatli import qilindi! Botni qayta ishga tushiring.", reply_markup=get_menu_button(user_id))
+            else:
+                await update.message.reply_text("Firebase ma'lumotlarini import qilishda xatolik yuz berdi!", reply_markup=get_menu_button(user_id))
         except json.JSONDecodeError:
             await update.message.reply_text("Yuborilgan fayl noto‘g‘ri JSON formatida!", reply_markup=get_menu_button(user_id))
         except Exception as e:
